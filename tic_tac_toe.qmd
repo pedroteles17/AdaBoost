@@ -1,0 +1,280 @@
+---
+title: "Tic-Tac-Toe End Game"
+author: "Pedro Teles"
+code-annotations: hover
+toc: true
+format: 
+    html:
+        code-fold: show
+        code-summary: "Show the code"
+        code-tools: true
+        self-contained: true
+---
+
+```{python}
+#| code-fold: true
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.tree import DecisionTreeClassifier # Decision Stump
+from sklearn.model_selection import KFold # Cross Validation
+from sklearn.model_selection import cross_val_score # Cross Validation
+from sklearn.metrics import confusion_matrix 
+```
+
+# Ada Boost
+
+To implement Ada Boost, we create a class that receives the number of estimators (decision stumps) as a parameter. The class has two methods, `train` and `predict`. The `train` method receives the training data and the labels and trains the model. The `predict` method receives the test data and returns the predictions.
+
+To further explain the algorithm, we will explain every method of the class. However, before we start, it's worth saying that the code has some annotations that appear when the user hovers over it.
+
+```{python}
+class AdaBoost:
+    def __init__(self, n_estimators: int):
+        self.n_estimators = n_estimators # <1>
+        self.estimators = [] # <2>
+        self.estimator_weights = [] # <3>
+    
+    def train(self, X: np.ndarray, y: np.ndarray):
+        n_samples = X.shape[0]
+        weights = np.full(n_samples, 1 / n_samples) # <4>
+
+        for _ in range(self.n_estimators):
+            model = DecisionTreeClassifier(max_depth=1, max_leaf_nodes=2) # <5>
+            model.fit(X, y, sample_weight=weights) # <6>
+            y_pred = model.predict(X)
+
+            error = weights[(y_pred != y)].sum() # <7>
+            amount_of_say = self._calculate_amount_of_say(error)
+
+            weights = self._update_weights(weights, amount_of_say, y_pred, y)
+
+            self.estimators.append(model)
+            self.estimator_weights.append(amount_of_say)
+    
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        n_samples = X.shape[0]
+        ensemble_predictions = np.zeros(n_samples)
+        
+        for estimator, alpha in zip(self.estimators, self.estimator_weights):
+            ensemble_predictions += alpha * estimator.predict(X) # <8>
+        
+        return np.sign(ensemble_predictions) # <9>
+
+    def _calculate_amount_of_say(self, error: float) -> float:
+        epsilon = 1e-10 # <10>
+        error = max(error, epsilon) # <10>  
+        error = min(error, 1 - epsilon) # <10> 
+
+        alpha = 0.5 * np.log((1 - error) / error)
+
+        return alpha
+
+    def _update_weights(
+        self,
+        pervious_weights: np.ndarray, 
+        amount_of_say: float, 
+        y_pred: np.ndarray, 
+        y_true: np.ndarray
+    ) -> np.ndarray:
+        new_weights = pervious_weights * np.exp(-amount_of_say * y_pred * y_true) 
+
+        new_weights = new_weights / new_weights.sum() # <11>
+
+        return new_weights
+
+```
+
+1. The number of estimators is the number of decision stumps in the ensemble.
+
+2. For each stump, we store the decision (model).
+
+3. For each stump, we store the amount of say (alpha).
+
+4. We initialize the weights of each observation to 1/n, where n is the number of observations.
+
+5. A decision stump is a decision tree with a depth of one and two leaf nodes. It is also called a decision tree stump.
+
+6. Using the parameter `sample_weight`, we pass the weights of each observation to the decision stump.
+
+7. The error is the sum of the weights of the misclassified samples.
+
+8. We calculate the weighted sum of the predictions of each stump. This is the way that AdaBoost combines the predictions of the stumps.
+
+9. We return the sign of the weighted sum of the predictions. If the sum is positive, the prediction is 1. If the sum is negative, the prediction is -1.
+
+10. This function misbehaves at 0 or 1. To avoid this, we add or subtract a small value to the error, if needed.
+
+11. We normalize the weights so that they sum to 1.
+
+## Amount of Say
+
+The amount of say is the weight of each estimator in the ensemble. It is calculated using the error of the estimator. The error is the sum of the weights of the misclassified samples. The amount of say is calculated using the following formula:
+
+$$ \alpha^t = \frac{1}{2} \ln \left( \frac{1 - \epsilon^t}{\epsilon^t} \right) $$
+
+Where $\epsilon$ is the error of the estimator.
+
+As we can see, this function misbehaves when the error is zero or one. To avoid this, we add or subtract a small value to the error, if needed.
+
+## Weights
+
+The weights of each observation at iteration $t$ are based on the weights of the previous iteration, the amount of say of the current estimator, and the mistakes made by the current stump. We update the weights using the following formula:
+
+$$ w_i^{t+1} = \frac{w_i^t}{z} \times e^{-\alpha^t \times h^t(X) \times y(X)} $$
+
+Where $y(X)$ is the correct output {-1, 1}, $h^t(X)$ is the prediction of the current estimator, and $z$ is a normalization factor that ensures that the sum of the weights equals 1.
+
+## Training
+
+The training method receives the training data and the labels. It initializes the weights of each observation to $1/n$, where $n$ is the number of observations. Then, it trains the number of estimators specified in the constructor. For each estimator, it trains a decision stump using the weights of the observations. Then, it calculates the amount of say of the estimator and updates the weights of the observations. Finally, it stores the estimator and its amount of say.
+
+## Prediction
+
+The prediction method receives the test data and returns the predictions. It iterates over the estimators and their amount of say and calculates the weighted sum of the predictions, with the weights beign the amount of say for each stump.
+
+# Tic-Tac-Toe End Game
+
+## Loading the Data
+
+First, we load the data, transform the class column into a binary one (-1 or 1), and transform the categorical features into multiple binary ones. Since each column has tree possible values, we will have two (why not three?) new columns for each one of them.
+
+```{python}
+#| code-fold: true
+data = pd.read_csv('tic-tac-toe-endgame.csv')
+
+data.columns = [                                     # <1>
+    'top_left', 'top_middle', 'top_right',           # <1>
+    'middle_left', 'middle_middle', 'middle_right',  # <1>
+    'bottom_left', 'bottom_middle', 'bottom_right',  # <1>
+    'class'                                          # <1>
+]                                                    # <1>
+
+data['class'] = data['class'].map({'positive': 1, 'negative': -1}) # <2>
+
+data = pd.get_dummies(data, columns=None, drop_first=True) # <3>
+
+X, y = data.drop('class', axis=1), data['class'] # <4>
+
+data.head()
+```
+
+1. Rename the columns so their names are more intuitive and better reflect the board configuration.
+
+2. `positive` means that X won. `negative` means that O won.
+
+3. For every categorical column (holding "X", "O" or "b"), we create two dummies columns so that each column indicates which symbol was in a specific board square. The `drop_first` parameter avoids the dummy trap (perfect multicollinearity).
+
+4. We separate our target variable and our features.
+
+## Training and Testing
+
+Then, we do a 5-fold cross validation. We train the model on 4/5 of the data and test it on the remaining 1/5. We repeat this process 5 times, so that each fold is used as the test set once. We calculate the accuracy of the model on each fold and the average accuracy of the model. We repeat this process for different values of the number of estimators.
+
+```{python}
+#| code-fold: true
+def cross_validation(df, model, n_splits):
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    rows_per_part = len(df) // n_splits # <1>
+
+    error_metrics, y_pred_true = [], []
+    for i in range(n_splits):
+        test_start = i * rows_per_part        # <2>
+        test_end = (i + 1) * rows_per_part    # <2>
+
+        test = df.iloc[test_start:test_end] # <2>
+        train = df.drop(test.index)         # <2>
+
+        X_train, y_train = train.drop('class', axis=1), train['class']
+        X_test, y_test = test.drop('class', axis=1), test['class']
+
+        model.train(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+
+        accuracy = (y_pred == y_test).mean() # <3>
+
+        y_pred_dict = [{"y_pred": y_pred1, "y_true": y_test1} for y_pred1, y_test1 in zip(y_pred, y_test)]
+
+        y_pred_true += y_pred_dict
+
+        error_metrics.append(accuracy)
+
+    return error_metrics, y_pred_true 
+```
+
+1. We define the number of folds, and how many observations will be used for training and testing.
+
+2. We select the test set and the training set. The test set is a slice of the data, and the training set is the remaining data.
+
+3. We calculate the accuracy of the model on the test set, which is the percentage of correct predictions.
+
+```{python}
+model_data = {}
+for n_estimators in [1] + [i for i in range(10, 501, 10)]:
+    model = AdaBoost(n_estimators=n_estimators)
+
+    error_metrics, y_pred_true = cross_validation(data, model, n_splits=5)
+
+    model_data[n_estimators] = {
+        "error_metrics": error_metrics,
+        "y_pred_true": y_pred_true
+    }
+```
+
+## Results
+
+Finally, we present the results of the cross validation. First, we were able to achive a high acurracy, with a mean of 98%. Futhermore, we can see that the acurracy of each fold is very similar, which means that the model is not overfitting.
+
+```{python}
+#| code-fold: true
+last_error = model_data[500]["error_metrics"]
+
+print("Accuracy per fold using 500 estimators:", [f"{round(accuracy*100, 2)}%" for accuracy in error_metrics])
+
+print("Average accuracy using 500 estimators:", f"{round(np.mean(error_metrics)*100, 2)}%")
+```
+
+We can also see the confusion matrix, which shows that the model is very good at predicting both classes. The model only made 16 mistakes, and all of them were false positives. Based on this data, we can calculate the precision and recall of the model:
+
+* Precision: 97.5% (624 / (624 + 16))
+* Recall: 100% (624 / (624 + 0))
+
+```{python}
+#| code-fold: true
+y_pred_true_df = pd.DataFrame(model_data[500]["y_pred_true"])
+
+confusion_mtx = confusion_matrix(y_pred_true_df["y_true"], y_pred_true_df["y_pred"])
+
+pd.DataFrame(confusion_mtx)
+```
+
+Finally, we can see how the number of estimators affects the accuracy of the model. We can see that the accuracy increases as the number of estimators increases, but the increase is not very significant after 200 estimators. By the elbow method, we can conclude that the optimal number of estimators is close to 200.
+
+```{python}
+#| code-fold: true
+n_estimators_acurracy = []
+for key, value in model_data.items():
+    aux_dict = {
+        "num_estimators": key,
+        "accuracy": np.mean(value["error_metrics"])
+    }
+    
+    n_estimators_acurracy.append(aux_dict)
+
+n_estimators_acurracy_df = pd.DataFrame(n_estimators_acurracy)
+
+# Plotting the graph
+plt.plot(n_estimators_acurracy_df["num_estimators"], n_estimators_acurracy_df["accuracy"])
+plt.xlabel('Number of Estimators')
+plt.ylabel('Accuracy')
+plt.title('Accuracy vs. Number of Estimators')
+plt.grid(True)
+plt.show()
+```
+
+
+
